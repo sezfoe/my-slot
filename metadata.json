@@ -1,0 +1,5 @@
+{
+  "name": "水果老虎機 (Fruit Slot Machine)",
+  "description": "一個經典的 3x3 水果老虎機遊戲，具有 5 條賠付線和流暢的旋轉動畫。",
+  "requestFramePermissions": []
+}
