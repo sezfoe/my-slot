@@ -11,8 +11,8 @@ import { Coins, Play, RotateCcw, Trophy, Info, Volume2, VolumeX } from 'lucide-r
 
 const SYMBOLS = [
   { id: 'cherry', char: '🍒', value: 2, weight: 5 },
-  { id: 'lemon', char: '🍋', value: 3, weight: 4 },
-  { id: 'orange', char: '🍊', value: 5, weight: 3 },
+  { id: 'watermelon', char: '🍉', value: 3, weight: 4 },
+  { id: 'kiwi', char: '🥝', value: 5, weight: 3 },
   { id: 'plum', char: '🍇', value: 10, weight: 2 },
   { id: 'bell', char: '🔔', value: 20, weight: 1.5 },
   { id: 'bar', char: '🎰', value: 50, weight: 1 },
@@ -24,6 +24,8 @@ const ROWS_VISIBLE = 3;
 const SYMBOLS_PER_REEL = 20;
 const SPIN_DURATION = 2; // seconds
 
+const BET_STEPS = [1, 2, 5, 10, 20];
+
 const PAYLINES = [
   [0, 0, 0], // Top row
   [1, 1, 1], // Middle row
@@ -31,6 +33,15 @@ const PAYLINES = [
   [0, 1, 2], // Diagonal down
   [2, 1, 0], // Diagonal up
 ];
+
+const THEORETICAL_RTP = (() => {
+  const totalWeight = SYMBOLS.reduce((sum, s) => sum + s.weight, 0);
+  const expectedReturnPerPayline = SYMBOLS.reduce((sum, s) => {
+    const prob = s.weight / totalWeight;
+    return sum + (Math.pow(prob, 3) * s.value);
+  }, 0);
+  return expectedReturnPerPayline * PAYLINES.length * 100;
+})();
 
 type SymbolType = typeof SYMBOLS[0];
 
@@ -54,14 +65,19 @@ const generateReel = () => {
 
 export default function App() {
   const [balance, setBalance] = useState(1000);
-  const [bet, setBet] = useState(10);
+  const [bet, setBet] = useState(BET_STEPS[0]);
+  const [totalBet, setTotalBet] = useState(0);
+  const [totalWin, setTotalWin] = useState(0);
   const [isSpinning, setIsSpinning] = useState(false);
+  const [isAutoSpin, setIsAutoSpin] = useState(false);
   const [reels, setReels] = useState<SymbolType[][]>([[], [], []]);
   const [reelOffsets, setReelOffsets] = useState([0, 0, 0]);
   const [winAmount, setWinAmount] = useState(0);
   const [winningLines, setWinningLines] = useState<number[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showInfo, setShowInfo] = useState(false);
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const isLongPress = useRef(false);
 
   // Initialize reels
   useEffect(() => {
@@ -72,6 +88,7 @@ export default function App() {
     if (isSpinning || balance < bet) return;
 
     setBalance(prev => prev - bet);
+    setTotalBet(prev => prev + bet);
     setIsSpinning(true);
     setWinAmount(0);
     setWinningLines([]);
@@ -89,9 +106,25 @@ export default function App() {
     // Wait for animation to finish
     setTimeout(() => {
       setIsSpinning(false);
+      // Seamlessly reset offsets to a small range (0-19) to prevent boundary issues
+      const normalizedOffsets = newOffsets.map(o => o % SYMBOLS_PER_REEL);
+      setReelOffsets(normalizedOffsets);
       checkWins(newOffsets);
-    }, SPIN_DURATION * 1000 + 500); // Add a small buffer
+    }, SPIN_DURATION * 1000 + 100); 
   }, [isSpinning, balance, bet, reelOffsets]);
+
+  // Auto Spin logic
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (isAutoSpin && !isSpinning && balance >= bet) {
+      timer = setTimeout(() => {
+        spin();
+      }, 500); // 0.5 second delay between auto spins
+    } else if (isAutoSpin && balance < bet) {
+      setIsAutoSpin(false);
+    }
+    return () => clearTimeout(timer);
+  }, [isAutoSpin, isSpinning, balance, bet, spin]);
 
   const checkWins = (offsets: number[]) => {
     const visibleGrid: SymbolType[][] = [];
@@ -108,7 +141,7 @@ export default function App() {
       visibleGrid.push(column);
     }
 
-    let totalWin = 0;
+    let totalWinAmount = 0;
     const wins: number[] = [];
 
     PAYLINES.forEach((line, index) => {
@@ -118,21 +151,56 @@ export default function App() {
 
       if (s1.id === s2.id && s2.id === s3.id) {
         const win = s1.value * bet;
-        totalWin += win;
+        totalWinAmount += win;
         wins.push(index);
       }
     });
 
-    if (totalWin > 0) {
-      setWinAmount(totalWin);
-      setBalance(prev => prev + totalWin);
-      setWinningLines(wins);
+    setWinningLines(wins);
+    if (totalWinAmount > 0) {
+      setWinAmount(totalWinAmount);
+      setBalance(prev => prev + totalWinAmount);
+      setTotalWin(prev => prev + totalWinAmount);
     }
   };
 
-  const handleBetChange = (amount: number) => {
-    if (isSpinning) return;
-    setBet(Math.max(10, Math.min(balance, amount)));
+  const handleBetStep = (direction: 'up' | 'down') => {
+    if (isSpinning || isAutoSpin) return;
+    const currentIndex = BET_STEPS.indexOf(bet);
+    if (direction === 'up' && currentIndex < BET_STEPS.length - 1) {
+      const nextBet = BET_STEPS[currentIndex + 1];
+      if (nextBet <= balance) setBet(nextBet);
+    } else if (direction === 'down' && currentIndex > 0) {
+      setBet(BET_STEPS[currentIndex - 1]);
+    }
+  };
+
+  const handleSpinClick = () => {
+    if (isLongPress.current) {
+      isLongPress.current = false;
+      return;
+    }
+    if (isAutoSpin) {
+      setIsAutoSpin(false);
+      return;
+    }
+    spin();
+  };
+
+  const handlePointerDown = () => {
+    if (isAutoSpin) return;
+    isLongPress.current = false;
+    longPressTimer.current = setTimeout(() => {
+      isLongPress.current = true;
+      setIsAutoSpin(true);
+      spin();
+    }, 800); // 800ms for long press
+  };
+
+  const handlePointerUp = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+    }
   };
 
   return (
@@ -161,13 +229,35 @@ export default function App() {
         </div>
       </div>
 
+      {/* Combined Stats Bar */}
+      <div className="w-full max-w-md mb-6 flex flex-col gap-3 bg-[#1e293b]/60 p-4 rounded-2xl border border-[#334155] backdrop-blur-md shadow-lg">
+        <div className="flex justify-between items-center">
+          <span className="text-[11px] uppercase tracking-widest text-slate-400 font-bold">總押注 (Total Bet)</span>
+          <span className="text-sm font-mono font-bold text-slate-200">${totalBet.toLocaleString()}</span>
+        </div>
+        <div className="h-px bg-slate-700/30 w-full" />
+        <div className="flex justify-between items-center">
+          <span className="text-[11px] uppercase tracking-widest text-slate-400 font-bold">目前 RTP (Actual)</span>
+          <span className="text-sm font-mono font-bold text-emerald-400">
+            {totalBet > 0 ? ((totalWin / totalBet) * 100).toFixed(2) : "0.00"}%
+          </span>
+        </div>
+        <div className="h-px bg-slate-700/30 w-full" />
+        <div className="flex justify-between items-center">
+          <span className="text-[11px] uppercase tracking-widest text-indigo-400 font-bold">設計理論 RTP (Theoretical)</span>
+          <span className="text-sm font-mono font-bold text-indigo-300">
+            {THEORETICAL_RTP.toFixed(2)}%
+          </span>
+        </div>
+      </div>
+
       {/* Main Slot Machine Area */}
       <div className="relative bg-[#1e293b] p-6 rounded-3xl border-4 border-[#334155] shadow-[0_20px_50px_rgba(0,0,0,0.5)] w-full max-w-md">
         {/* Payline Indicators (Left) */}
-        <div className="absolute -left-8 top-1/2 -translate-y-1/2 flex flex-col gap-12 text-[10px] font-bold text-slate-500">
-          <span>L1</span>
-          <span>L2</span>
-          <span>L3</span>
+        <div className="absolute -left-10 top-[36px] h-[300px] flex flex-col text-[10px] font-black text-slate-500">
+          <div className="h-[100px] flex items-center justify-center">L1</div>
+          <div className="h-[100px] flex items-center justify-center">L2</div>
+          <div className="h-[100px] flex items-center justify-center">L3</div>
         </div>
 
         {/* Reels Container */}
@@ -184,16 +274,37 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 className="absolute inset-0 z-20 pointer-events-none"
               >
-                {winningLines.map(lineIdx => (
-                  <div key={lineIdx} className="absolute inset-0">
-                    {/* Simplified line visualization */}
-                    {lineIdx === 0 && <div className="absolute top-[16.6%] left-0 w-full h-1 bg-yellow-400 shadow-[0_0_10px_#fbbf24] animate-pulse" />}
-                    {lineIdx === 1 && <div className="absolute top-[50%] left-0 w-full h-1 bg-yellow-400 shadow-[0_0_10px_#fbbf24] animate-pulse" />}
-                    {lineIdx === 2 && <div className="absolute top-[83.3%] left-0 w-full h-1 bg-yellow-400 shadow-[0_0_10px_#fbbf24] animate-pulse" />}
-                    {lineIdx === 3 && <div className="absolute top-0 left-0 w-full h-full border-t-4 border-yellow-400 rotate-[33deg] origin-top-left scale-x-125 opacity-50" />}
-                    {lineIdx === 4 && <div className="absolute top-0 left-0 w-full h-full border-b-4 border-yellow-400 -rotate-[33deg] origin-bottom-left scale-x-125 opacity-50" />}
-                  </div>
-                ))}
+                <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  {winningLines.map(lineIdx => {
+                    const line = PAYLINES[lineIdx];
+                    // Calculate points for the SVG polyline
+                    // Using percentages based on grid layout with gaps
+                    const xCenters = [18.7, 50, 81.3];
+                    const yCenters = [19.1, 50, 80.9];
+                    
+                    const points = line.map((rowIdx, reelIdx) => {
+                      const x = xCenters[reelIdx];
+                      const y = yCenters[rowIdx];
+                      return `${x} ${y}`;
+                    }).join(', ');
+
+                    return (
+                      <motion.polyline
+                        key={lineIdx}
+                        points={points}
+                        fill="none"
+                        stroke="#fbbf24"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="drop-shadow-[0_0_10px_#fbbf24]"
+                        style={{ filter: 'drop-shadow(0 0 10px #fbbf24)' }}
+                      />
+                    );
+                  })}
+                </svg>
               </motion.div>
             )}
           </AnimatePresence>
@@ -205,14 +316,15 @@ export default function App() {
                   y: -reelOffsets[i] * 100, // Each symbol is 100px high
                 }}
                 transition={{
-                  duration: SPIN_DURATION,
+                  duration: isSpinning ? SPIN_DURATION : 0,
                   ease: [0.45, 0.05, 0.55, 0.95],
-                  delay: i * 0.2,
+                  delay: isSpinning ? i * 0.1 : 0,
                 }}
                 className="flex flex-col"
               >
-                {/* We repeat the reel multiple times to handle the infinite scroll feel */}
-                {Array.from({ length: 20 }).map((_, repeatIdx) => (
+                {/* We repeat the reel multiple times to handle the scroll feel. 
+                    3 times is enough if we reset offsets after each spin. */}
+                {Array.from({ length: 10 }).map((_, repeatIdx) => (
                   <React.Fragment key={repeatIdx}>
                     {reel.map((symbol, symIdx) => (
                       <div 
@@ -271,16 +383,16 @@ export default function App() {
             <span className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Bet Amount</span>
             <div className="flex items-center gap-3">
               <button 
-                onClick={() => handleBetChange(bet - 10)}
-                disabled={isSpinning || bet <= 10}
+                onClick={() => handleBetStep('down')}
+                disabled={isSpinning || bet === BET_STEPS[0]}
                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#334155] hover:bg-[#475569] disabled:opacity-50 transition-colors"
               >
                 -
               </button>
               <span className="text-xl font-mono font-bold w-12 text-center">${bet}</span>
               <button 
-                onClick={() => handleBetChange(bet + 10)}
-                disabled={isSpinning || bet >= balance}
+                onClick={() => handleBetStep('up')}
+                disabled={isSpinning || bet === BET_STEPS[BET_STEPS.length - 1] || BET_STEPS[BET_STEPS.indexOf(bet) + 1] > balance}
                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#334155] hover:bg-[#475569] disabled:opacity-50 transition-colors"
               >
                 +
@@ -291,34 +403,55 @@ export default function App() {
 
         {/* Action Buttons */}
         <button
-          onClick={() => setBalance(1000)}
+          onClick={() => {
+            setBalance(1000);
+            setTotalBet(0);
+            setTotalWin(0);
+          }}
           disabled={isSpinning || balance > 0}
-          className="flex items-center justify-center gap-2 py-4 rounded-2xl bg-slate-700 hover:bg-slate-600 disabled:opacity-50 transition-all font-bold uppercase tracking-widest text-xs"
+          className="flex items-center justify-center gap-2 h-20 rounded-2xl bg-slate-700 hover:bg-slate-600 disabled:opacity-50 transition-all font-bold uppercase tracking-widest text-xs"
         >
           <RotateCcw className="w-4 h-4" />
           Reset
         </button>
         <button
-          onClick={spin}
-          disabled={isSpinning || balance < bet}
+          onClick={handleSpinClick}
+          onPointerDown={handlePointerDown}
+          onPointerUp={handlePointerUp}
+          onPointerLeave={handlePointerUp}
+          disabled={(isSpinning && !isAutoSpin) || (balance < bet && !isAutoSpin)}
           className={`
-            relative overflow-hidden flex items-center justify-center gap-2 py-4 rounded-2xl font-black uppercase tracking-widest text-lg transition-all
-            ${isSpinning || balance < bet 
+            relative overflow-hidden flex flex-col items-center justify-center gap-1 h-20 rounded-2xl font-black uppercase tracking-widest transition-all
+            ${(isSpinning && !isAutoSpin) || (balance < bet && !isAutoSpin)
               ? 'bg-slate-800 text-slate-600 cursor-not-allowed' 
-              : 'bg-yellow-500 text-[#0f172a] hover:bg-yellow-400 active:scale-95 shadow-[0_10px_20px_rgba(234,179,8,0.3)]'}
+              : isAutoSpin 
+                ? 'bg-red-500 text-white hover:bg-red-400 shadow-[0_0_20px_rgba(239,68,68,0.4)] animate-pulse'
+                : 'bg-yellow-500 text-[#0f172a] hover:bg-yellow-400 shadow-[0_10px_20px_rgba(234,179,8,0.3)]'}
           `}
         >
-          {isSpinning ? (
-            <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-            >
-              <RotateCcw className="w-6 h-6" />
-            </motion.div>
+          {isSpinning && !isAutoSpin ? (
+            <>
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+              >
+                <RotateCcw className="w-6 h-6" />
+              </motion.div>
+              <span className="text-[10px]">SPINNING</span>
+            </>
           ) : (
             <>
-              <Play className="w-6 h-6 fill-current" />
-              Spin
+              {isAutoSpin ? (
+                <>
+                  <RotateCcw className="w-6 h-6 animate-spin" />
+                  <span className="text-[10px]">STOP AUTO</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-6 h-6 fill-current" />
+                  <span className="text-lg">Spin</span>
+                </>
+              )}
             </>
           )}
         </button>
